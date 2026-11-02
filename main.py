@@ -655,7 +655,6 @@ async def console_loop():
                     print(f"Could not fetch invites: {exc}")
             elif action == "export":
                 try:
-                    filename = await asyncio.to_thread(lambda: None)
                     filename = await export_guild(guild)
                     print(f"Server structure exported to: {filename}")
                 except (OSError, discord.HTTPException) as exc:
