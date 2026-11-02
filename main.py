@@ -483,13 +483,70 @@ async def on_ready():
 
 
 async def console_loop():
-    """Local, low-risk CLI for inspecting the bot and sending a single message."""
-    print("\\n[CONSOLE] Local control panel ready. Type 'help' for commands.")
+    """Local CLI for safe server-wide inspection and backup operations."""
+    print("\n[CONSOLE] Local control panel ready. Type 'help' for commands.")
+
+    async def export_guild(guild: discord.Guild):
+        """Export server structure without member data or destructive actions."""
+        backup = {
+            "name": guild.name,
+            "id": str(guild.id),
+            "description": guild.description or "",
+            "member_count": guild.member_count,
+            "created_at": guild.created_at.isoformat(),
+            "exported_at": datetime.now().isoformat(),
+            "roles": [],
+            "categories": [],
+            "channels": [],
+            "emojis": [],
+        }
+        for role in guild.roles:
+            if role.is_default():
+                continue
+            backup["roles"].append({
+                "name": role.name,
+                "id": str(role.id),
+                "color": str(role.color),
+                "permissions": role.permissions.value,
+                "mentionable": role.mentionable,
+                "hoist": role.hoist,
+                "position": role.position,
+            })
+        for category in guild.categories:
+            backup["categories"].append({
+                "name": category.name, "id": str(category.id),
+                "position": category.position,
+            })
+        for channel in guild.channels:
+            if isinstance(channel, discord.CategoryChannel):
+                continue
+            item = {
+                "name": channel.name, "id": str(channel.id),
+                "type": str(channel.type), "position": channel.position,
+                "category": channel.category.name if channel.category else None,
+            }
+            if isinstance(channel, discord.TextChannel):
+                item.update({
+                    "topic": channel.topic or "",
+                    "nsfw": channel.nsfw,
+                    "slowmode_delay": channel.slowmode_delay,
+                })
+            backup["channels"].append(item)
+        for emoji in guild.emojis:
+            backup["emojis"].append({
+                "name": emoji.name, "animated": emoji.animated,
+                "id": str(emoji.id),
+            })
+        filename = f"backup_{guild.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(filename, "w", encoding="utf-8") as file:
+            json.dump(backup, file, indent=2, ensure_ascii=False)
+        return filename
+
     while not bot.is_closed():
         try:
             line = await asyncio.to_thread(input, "nuke-bot> ")
         except (EOFError, KeyboardInterrupt):
-            print("\\n[CONSOLE] Input closed. Bot will keep running; use 'quit' to stop it.")
+            print("\n[CONSOLE] Input closed. Bot will keep running; use 'quit' to stop it.")
             return
 
         parts = line.strip().split(maxsplit=3)
@@ -499,13 +556,19 @@ async def console_loop():
 
         if command in {"help", "?"}:
             print("Commands:")
-            print("  status                         Show connection status")
-            print("  guilds                         List servers the bot is in")
-            print("  serverinfo <guild_id>          Show basic server information")
-            print("  channels <guild_id>            List text channels and IDs")
-            print("  send <guild_id> <channel_id> <message>  Send one message")
-            print("  quit                           Shut down the bot")
-            print("Note: destructive bulk actions are intentionally not exposed in the local console.")
+            print("  status                              Show connection status")
+            print("  guilds                              List servers the bot is in")
+            print("  serverinfo <guild_id>               Show server information")
+            print("  channels <guild_id>                 List text channels and IDs")
+            print("  send <guild_id> <channel_id> <msg>  Send one message")
+            print("  bulk summary                        Overview of every server")
+            print("  bulk channels [guild_id]            List channels across servers")
+            print("  bulk roles <guild_id>               List roles and member counts")
+            print("  bulk audit [guild_id]               Audit bot permissions")
+            print("  bulk invites <guild_id>             List active server invites")
+            print("  bulk export <guild_id>              Export server structure to JSON")
+            print("  quit                                Shut down the bot")
+            print("Bulk terminal commands are read-only except for creating a local JSON backup.")
         elif command == "status":
             print(f"Connected: {bot.is_ready()} | User: {bot.user} | Servers: {len(bot.guilds)}")
         elif command == "guilds":
@@ -527,6 +590,78 @@ async def console_loop():
             else:
                 for channel in guild.text_channels:
                     print(f"#{channel.name} | ID: {channel.id}")
+        elif command == "bulk":
+            if len(parts) < 2:
+                print("Usage: bulk <summary|channels|roles|audit|invites|export> [guild_id]")
+                continue
+            action = parts[1].lower()
+            guild = None
+            if len(parts) >= 3 and parts[2].isdigit():
+                guild = bot.get_guild(int(parts[2]))
+                if guild is None:
+                    print("Server not found. Check the guild ID.")
+                    continue
+            elif action not in {"summary", "channels"}:
+                print(f"Usage: bulk {action} <guild_id>")
+                continue
+
+            if action == "summary":
+                for item in bot.guilds:
+                    print(
+                        f"{item.name} | ID: {item.id} | Members: {item.member_count} | "
+                        f"Text: {len(item.text_channels)} | Voice: {len(item.voice_channels)} | "
+                        f"Roles: {len(item.roles)}"
+                    )
+                if not bot.guilds:
+                    print("The bot is not in any servers.")
+            elif action == "channels":
+                targets = [guild] if guild else list(bot.guilds)
+                for item in targets:
+                    print(f"\n[{item.name}]")
+                    for channel in item.channels:
+                        print(f"{channel.name} | {channel.type} | ID: {channel.id}")
+            elif action == "roles":
+                for role in guild.roles:
+                    member_count = sum(1 for member in guild.members if role in member.roles)
+                    print(f"{role.name} | ID: {role.id} | Members: {member_count} | Permissions: {role.permissions.value}")
+            elif action == "audit":
+                targets = [guild] if guild else list(bot.guilds)
+                for item in targets:
+                    me = item.me
+                    perms = me.guild_permissions if me else discord.Permissions.none()
+                    print(f"\n[{item.name}]")
+                    for label, allowed in (
+                        ("View channels", perms.view_channel),
+                        ("Send messages", perms.send_messages),
+                        ("Manage channels", perms.manage_channels),
+                        ("Manage roles", perms.manage_roles),
+                        ("Kick members", perms.kick_members),
+                        ("Ban members", perms.ban_members),
+                        ("Manage server", perms.manage_guild),
+                        ("Administrator", perms.administrator),
+                    ):
+                        print(f"  {label}: {'YES' if allowed else 'no'}")
+            elif action == "invites":
+                try:
+                    invites = await guild.invites()
+                    if not invites:
+                        print("No active invites found (or the bot lacks permission).")
+                    for invite in invites:
+                        channel_name = getattr(invite.channel, "name", "unknown")
+                        print(f"https://discord.gg/{invite.code} | Channel: {channel_name} | Uses: {invite.uses} | Expires: {invite.expires_at}")
+                except discord.Forbidden:
+                    print("Missing Manage Server permission to view invites.")
+                except discord.HTTPException as exc:
+                    print(f"Could not fetch invites: {exc}")
+            elif action == "export":
+                try:
+                    filename = await asyncio.to_thread(lambda: None)
+                    filename = await export_guild(guild)
+                    print(f"Server structure exported to: {filename}")
+                except (OSError, discord.HTTPException) as exc:
+                    print(f"Export failed: {exc}")
+            else:
+                print("Unknown bulk action. Type 'help' for available commands.")
         elif command == "send":
             if len(parts) < 4:
                 print("Usage: send <guild_id> <channel_id> <message>")
@@ -539,8 +674,7 @@ async def console_loop():
             if not isinstance(channel, discord.TextChannel):
                 print("Text channel not found in that server.")
                 continue
-            me = guild.me
-            permissions = channel.permissions_for(me)
+            permissions = channel.permissions_for(guild.me)
             if not permissions.send_messages:
                 print("The bot does not have permission to send messages in that channel.")
                 continue
@@ -554,7 +688,7 @@ async def console_loop():
             await bot.close()
             return
         else:
-            print("Unknown command. Type 'help'." )
+            print("Unknown command. Type 'help'.")
 
 
 @bot.event
