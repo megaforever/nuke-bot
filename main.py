@@ -2,6 +2,8 @@ import asyncio
 import inspect
 import io
 import json
+import os
+from getpass import getpass
 import re
 import types
 from datetime import datetime
@@ -473,6 +475,86 @@ async def on_ready():
 
     for guild in bot.guilds:
         await _refresh_invite_cache(guild)
+
+    # Start the local Termux/terminal control panel once the bot is ready.
+    if not getattr(bot, "_console_started", False):
+        bot._console_started = True
+        asyncio.create_task(console_loop())
+
+
+async def console_loop():
+    """Local, low-risk CLI for inspecting the bot and sending a single message."""
+    print("\\n[CONSOLE] Local control panel ready. Type 'help' for commands.")
+    while not bot.is_closed():
+        try:
+            line = await asyncio.to_thread(input, "nuke-bot> ")
+        except (EOFError, KeyboardInterrupt):
+            print("\\n[CONSOLE] Input closed. Bot will keep running; use 'quit' to stop it.")
+            return
+
+        parts = line.strip().split(maxsplit=3)
+        if not parts:
+            continue
+        command = parts[0].lower()
+
+        if command in {"help", "?"}:
+            print("Commands:")
+            print("  status                         Show connection status")
+            print("  guilds                         List servers the bot is in")
+            print("  serverinfo <guild_id>          Show basic server information")
+            print("  channels <guild_id>            List text channels and IDs")
+            print("  send <guild_id> <channel_id> <message>  Send one message")
+            print("  quit                           Shut down the bot")
+            print("Note: destructive bulk actions are intentionally not exposed in the local console.")
+        elif command == "status":
+            print(f"Connected: {bot.is_ready()} | User: {bot.user} | Servers: {len(bot.guilds)}")
+        elif command == "guilds":
+            for guild in bot.guilds:
+                print(f"{guild.name} | ID: {guild.id} | Members: {guild.member_count}")
+            if not bot.guilds:
+                print("The bot is not in any servers.")
+        elif command in {"serverinfo", "channels"}:
+            if len(parts) < 2 or not parts[1].isdigit():
+                print(f"Usage: {command} <guild_id>")
+                continue
+            guild = bot.get_guild(int(parts[1]))
+            if guild is None:
+                print("Server not found. Check the ID and confirm the bot is a member.")
+                continue
+            if command == "serverinfo":
+                print(f"{guild.name} | ID: {guild.id} | Owner: {guild.owner} | Members: {guild.member_count}")
+                print(f"Text channels: {len(guild.text_channels)} | Voice channels: {len(guild.voice_channels)} | Roles: {len(guild.roles)}")
+            else:
+                for channel in guild.text_channels:
+                    print(f"#{channel.name} | ID: {channel.id}")
+        elif command == "send":
+            if len(parts) < 4:
+                print("Usage: send <guild_id> <channel_id> <message>")
+                continue
+            if not parts[1].isdigit() or not parts[2].isdigit():
+                print("Guild and channel IDs must be numeric.")
+                continue
+            guild = bot.get_guild(int(parts[1]))
+            channel = guild.get_channel(int(parts[2])) if guild else None
+            if not isinstance(channel, discord.TextChannel):
+                print("Text channel not found in that server.")
+                continue
+            me = guild.me
+            permissions = channel.permissions_for(me)
+            if not permissions.send_messages:
+                print("The bot does not have permission to send messages in that channel.")
+                continue
+            try:
+                await channel.send(parts[3])
+                print(f"Message sent to #{channel.name} in {guild.name}.")
+            except discord.HTTPException as exc:
+                print(f"Discord rejected the message: {exc}")
+        elif command in {"quit", "exit"}:
+            print("[CONSOLE] Shutting down...")
+            await bot.close()
+            return
+        else:
+            print("Unknown command. Type 'help'." )
 
 
 @bot.event
@@ -3239,14 +3321,18 @@ async def clear_admin_invite(ctx, code: str):
 # ============================================================================
 
 if __name__ == "__main__":
-    token = config.get("token")
+    # Prefer an environment variable; otherwise ask privately in the terminal.
+    # The token is never echoed or written back to config.json.
+    token = os.environ.get("DISCORD_BOT_TOKEN") or config.get("token")
+    if not token or token == "BOT_TOKEN":
+        try:
+            token = getpass("Enter your Discord bot token (input hidden): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            token = ""
+
     if not token:
-        print(f'{Fore.RED}{t("token_not_found")}{Style.RESET_ALL}')
-        print(t("token_add_instruction"))
-        print(t("token_example"))
+        print(f'{Fore.RED}No bot token supplied. Set DISCORD_BOT_TOKEN or run again and enter it at the prompt.{Style.RESET_ALL}')
     else:
-        print(f'{Fore.CYAN}{t("token_loaded")}{Style.RESET_ALL}')
-
+        print(f'{Fore.CYAN}Bot token loaded securely.{Style.RESET_ALL}')
         configure_proxy(bot, config, logger)
-
         bot.run(token)
