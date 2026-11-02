@@ -119,6 +119,22 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
+When prompted, paste your Discord **bot token** into the hidden input prompt (the characters will not appear) and press Enter. The token is used for this run only and is not saved to `config.json`.
+
+After the bot connects, use the local terminal control panel:
+
+```text
+help
+status
+guilds
+serverinfo <guild_id>
+channels <guild_id>
+send <guild_id> <channel_id> <message>
+quit
+```
+
+The local console intentionally provides status, inspection, one-message sending, and shutdown controls. It does not expose destructive bulk actions.
+
 ***
 # Configuration
 Edit `config.json` and configure your bot settings:
